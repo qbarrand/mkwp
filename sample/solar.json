@@ -1,0 +1,20 @@
+[
+    {
+        "fileName": "1.png",
+        "isPrimary": true,
+        "isForLight": true,
+        "altitude": 27.95,
+        "azimuth": 279.66
+    },
+    {
+        "fileName": "2.png",
+        "altitude": -31.05,
+        "azimuth": 4.16
+    },
+    {
+        "fileName": "16.png",
+        "isForDark": true,
+        "altitude": -28.63,
+        "azimuth": 340.41
+    }
+]
