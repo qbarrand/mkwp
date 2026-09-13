@@ -76,6 +76,10 @@ struct Args {
     #[arg(short, long, value_name = "FILE", default_value = "output.heif")]
     output: String,
 
+    /// HEVC encoding speed/compression tradeoff
+    #[arg(long = "libheif-preset", value_enum, default_value_t = img::Preset::Slow)]
+    preset: img::Preset,
+
     /// Minimum log level
     #[arg(
         short,
@@ -97,8 +101,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let json = fs::read_to_string(&args.input)?;
     let input = parse_json(&json)?;
 
-    info!(count = input.len(); "Encoding HEIF images");
-    img::build_heif(&input, Path::new(&args.input), Path::new(&args.output))?;
+    info!(count = input.len(), preset = format!("{:?}", args.preset); "Encoding HEIF images");
+    img::build_heif(
+        &input,
+        Path::new(&args.input),
+        Path::new(&args.output),
+        args.preset,
+    )?;
     info!(path = &args.output.as_str(); "Wrote HEIF file");
 
     Ok(())
@@ -106,7 +115,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommonInput, Input, SolarInput, TimeInput, parse_json};
+    use super::{Args, CommonInput, Input, SolarInput, TimeInput, img::Preset, parse_json};
+    use clap::Parser;
+
+    #[test]
+    fn parses_heif_preset() {
+        let args =
+            Args::try_parse_from(["mkwp", "input.json", "--libheif-preset", "fast"]).unwrap();
+
+        assert_eq!(args.preset, Preset::Fast);
+    }
 
     #[test]
     fn parses_time_json() {

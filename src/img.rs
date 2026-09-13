@@ -1,4 +1,6 @@
+use clap::ValueEnum;
 use image::{ImageFormat, ImageReader, RgbaImage};
+use log::info;
 use std::{
     ffi::{CStr, CString},
     path::{Path, PathBuf},
@@ -8,6 +10,38 @@ use std::{
 use thiserror::Error;
 
 use crate::Input;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum Preset {
+    Ultrafast,
+    Superfast,
+    Veryfast,
+    Faster,
+    Fast,
+    Medium,
+    #[default]
+    Slow,
+    Slower,
+    Veryslow,
+    Placebo,
+}
+
+impl Preset {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ultrafast => "ultrafast",
+            Self::Superfast => "superfast",
+            Self::Veryfast => "veryfast",
+            Self::Faster => "faster",
+            Self::Fast => "fast",
+            Self::Medium => "medium",
+            Self::Slow => "slow",
+            Self::Slower => "slower",
+            Self::Veryslow => "veryslow",
+            Self::Placebo => "placebo",
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum HeifError {
@@ -111,6 +145,7 @@ pub fn build_heif(
     inputs: &[Input],
     input_json_path: &Path,
     output_path: &Path,
+    preset: Preset,
 ) -> Result<(), BuildHeifError> {
     if inputs.is_empty() {
         return Err(BuildHeifError::NoImages);
@@ -123,13 +158,29 @@ pub fn build_heif(
     let context = HeifContext::new()?;
     let encoder = HeifEncoder::new(context.as_ptr())?;
     encoder.set_quality(90)?;
+    encoder.set_preset(preset)?;
 
-    for input in inputs {
-        let image = load_into_libheif(&base_dir.join(input.file_name()))?;
+    for (index, input) in inputs.iter().enumerate() {
+        let image_path = base_dir.join(input.file_name());
+        info!(
+            index = index + 1,
+            total = inputs.len(),
+            path = image_path.display().to_string();
+            "Processing image"
+        );
+
+        let image = load_into_libheif(&image_path)?;
         let encoded = context.encode(&image, &encoder)?;
         if input.is_primary() {
             context.set_primary(&encoded)?;
         }
+
+        info!(
+            index = index + 1,
+            total = inputs.len(),
+            path = image_path.display().to_string();
+            "Finished processing image"
+        );
     }
 
     let output = output_path
@@ -248,6 +299,18 @@ impl HeifEncoder {
             ))
         }
     }
+
+    fn set_preset(&self, preset: Preset) -> Result<(), HeifError> {
+        let parameter = c"preset";
+        let value = CString::new(preset.as_str()).expect("preset names do not contain NUL bytes");
+        unsafe {
+            check_heif_error(libheif_sys::heif_encoder_set_parameter_string(
+                self.as_ptr(),
+                parameter.as_ptr(),
+                value.as_ptr(),
+            ))
+        }
+    }
 }
 
 impl Drop for HeifEncoder {
@@ -353,7 +416,7 @@ impl TryFrom<&RgbaImage> for HeifImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{HeifImage, build_heif, check_heif_error, load_rgba};
+    use super::{HeifImage, Preset, build_heif, check_heif_error, load_rgba};
     use image::{ImageFormat, RgbaImage};
     use std::{
         ffi::CString,
@@ -402,7 +465,7 @@ mod tests {
         let output_path = directory.join("wallpaper.heif");
 
         let inputs = crate::parse_json(manifest).unwrap();
-        build_heif(&inputs, &manifest_path, &output_path).unwrap();
+        build_heif(&inputs, &manifest_path, &output_path, Preset::Slow).unwrap();
 
         let context = unsafe { libheif_sys::heif_context_alloc() };
         let output = CString::new(output_path.to_str().unwrap()).unwrap();
