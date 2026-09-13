@@ -1,7 +1,9 @@
+pub mod img;
+
 use clap::Parser;
 use log::info;
 use serde::Deserialize;
-use std::{error::Error, fs};
+use std::{error::Error, fs, path::Path};
 
 fn parse_log_level(value: &str) -> Result<log::LevelFilter, String> {
     value
@@ -43,6 +45,22 @@ pub enum Input {
     Solar(SolarInput),
 }
 
+impl Input {
+    pub(crate) fn file_name(&self) -> &str {
+        match self {
+            Self::Time(input) => &input.common.file_name,
+            Self::Solar(input) => &input.common.file_name,
+        }
+    }
+
+    pub(crate) fn is_primary(&self) -> bool {
+        match self {
+            Self::Time(input) => input.common.is_primary,
+            Self::Solar(input) => input.common.is_primary,
+        }
+    }
+}
+
 pub fn parse_json(json: &str) -> Result<Vec<Input>, serde_json::Error> {
     serde_json::from_str::<Vec<Input>>(json)
 }
@@ -79,7 +97,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let json = fs::read_to_string(&args.input)?;
     let input = parse_json(&json)?;
 
-    info!("Input: {:?}", input);
+    info!(count = input.len(); "Encoding HEIF images");
+    img::build_heif(&input, Path::new(&args.input), Path::new(&args.output))?;
+    info!(path = &args.output.as_str(); "Wrote HEIF file");
 
     Ok(())
 }
