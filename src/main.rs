@@ -1,4 +1,5 @@
 pub mod img;
+pub mod metadata;
 
 use clap::Parser;
 use log::info;
@@ -57,6 +58,27 @@ impl Input {
         match self {
             Self::Time(input) => input.common.is_primary,
             Self::Solar(input) => input.common.is_primary,
+        }
+    }
+
+    pub(crate) fn is_for_light(&self) -> bool {
+        match self {
+            Self::Time(input) => input.common.is_for_light,
+            Self::Solar(input) => input.common.is_for_light,
+        }
+    }
+
+    pub(crate) fn is_for_dark(&self) -> bool {
+        match self {
+            Self::Time(input) => input.common.is_for_dark,
+            Self::Solar(input) => input.common.is_for_dark,
+        }
+    }
+
+    pub(crate) fn time(&self) -> Option<&str> {
+        match self {
+            Self::Time(input) => Some(&input.time),
+            Self::Solar(_) => None,
         }
     }
 }
