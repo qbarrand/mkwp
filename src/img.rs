@@ -179,9 +179,11 @@ pub fn build_heif(
 
         let image = load_into_libheif(&image_path)?;
         let encoded = context.encode(&image, &encoder)?;
+        if index == 0 {
+            context.add_xmp_metadata(&encoded, &xmp)?;
+        }
         if input.is_primary() {
             context.set_primary(&encoded)?;
-            context.add_xmp_metadata(&encoded, &xmp)?;
         }
 
         info!(
@@ -518,19 +520,20 @@ mod tests {
             .unwrap();
             assert_eq!(primary_id, image_ids[1]);
 
-            let mut primary_handle = std::ptr::null_mut();
-            check_heif_error(libheif_sys::heif_context_get_primary_image_handle(
+            let mut first_handle = std::ptr::null_mut();
+            check_heif_error(libheif_sys::heif_context_get_image_handle(
                 context,
-                &mut primary_handle,
+                image_ids[0],
+                &mut first_handle,
             ))
             .unwrap();
             assert_eq!(
-                libheif_sys::heif_image_handle_get_number_of_auxiliary_images(primary_handle, 0,),
+                libheif_sys::heif_image_handle_get_number_of_auxiliary_images(first_handle, 0,),
                 0
             );
             assert_eq!(
                 libheif_sys::heif_image_handle_get_number_of_metadata_blocks(
-                    primary_handle,
+                    first_handle,
                     c"mime".as_ptr(),
                 ),
                 1
@@ -538,7 +541,7 @@ mod tests {
             let mut metadata_id = 0;
             assert_eq!(
                 libheif_sys::heif_image_handle_get_list_of_metadata_block_IDs(
-                    primary_handle,
+                    first_handle,
                     c"mime".as_ptr(),
                     &mut metadata_id,
                     1,
@@ -546,17 +549,32 @@ mod tests {
                 1
             );
             let metadata_size =
-                libheif_sys::heif_image_handle_get_metadata_size(primary_handle, metadata_id);
+                libheif_sys::heif_image_handle_get_metadata_size(first_handle, metadata_id);
             let mut metadata = vec![0; metadata_size];
             check_heif_error(libheif_sys::heif_image_handle_get_metadata(
-                primary_handle,
+                first_handle,
                 metadata_id,
                 metadata.as_mut_ptr().cast(),
             ))
             .unwrap();
             assert_eq!(metadata, crate::metadata::xmp(&inputs).unwrap());
 
+            let mut primary_handle = std::ptr::null_mut();
+            check_heif_error(libheif_sys::heif_context_get_primary_image_handle(
+                context,
+                &mut primary_handle,
+            ))
+            .unwrap();
+            assert_eq!(
+                libheif_sys::heif_image_handle_get_number_of_metadata_blocks(
+                    primary_handle,
+                    c"mime".as_ptr(),
+                ),
+                0
+            );
+
             libheif_sys::heif_image_handle_release(primary_handle);
+            libheif_sys::heif_image_handle_release(first_handle);
             libheif_sys::heif_context_free(context);
         }
 
