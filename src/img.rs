@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use image::{ImageFormat, ImageReader, RgbaImage};
+use image::{ImageFormat, ImageReader, RgbImage};
 use log::info;
 use std::{
     ffi::{CStr, CString},
@@ -95,8 +95,11 @@ pub enum BuildHeifError {
     OutputPathContainsNul { path: PathBuf },
 }
 
-/// Reads a JPEG or PNG file into RGBA pixels without resizing or cropping it.
-pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImageLoadError> {
+/// Reads a JPEG or PNG file into RGB pixels without resizing or cropping it.
+///
+/// Alpha is intentionally discarded: macOS Dynamic Desktop images are opaque,
+/// and encoding RGBA makes libheif add a separate auxiliary alpha image.
+pub fn load_rgb(path: &Path) -> Result<RgbImage, ImageLoadError> {
     let display_path = path.display().to_string();
 
     let reader = ImageReader::open(path)
@@ -125,7 +128,7 @@ pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImageLoadError> {
 
     reader
         .decode()
-        .map(|image| image.to_rgba8())
+        .map(|image| image.to_rgb8())
         .map_err(|source| ImageLoadError::Read {
             path: path.display().to_string(),
             source,
@@ -137,8 +140,8 @@ pub fn load_rgba(path: &Path) -> Result<RgbaImage, ImageLoadError> {
 /// The decoded image retains its original dimensions; this function does not
 /// resize, crop, or otherwise transform it.
 pub fn load_into_libheif(path: &Path) -> Result<HeifImage, ImageToHeifError> {
-    let rgba = load_rgba(path)?;
-    Ok(HeifImage::try_from(&rgba)?)
+    let rgb = load_rgb(path)?;
+    Ok(HeifImage::try_from(&rgb)?)
 }
 
 /// Encodes the images named by an input manifest into one multi-image HEIF file.
@@ -370,15 +373,15 @@ impl Drop for HeifImage {
     }
 }
 
-impl TryFrom<&RgbaImage> for HeifImage {
+impl TryFrom<&RgbImage> for HeifImage {
     type Error = HeifError;
 
     /// Copies the source into a libheif image without resizing or cropping it.
     ///
     /// libheif owns the destination allocation. Its row stride may be larger
-    /// than `source.width() * 4`, so rows are copied individually rather than
+    /// than `source.width() * 3`, so rows are copied individually rather than
     /// as one contiguous slice.
-    fn try_from(source: &RgbaImage) -> Result<Self, Self::Error> {
+    fn try_from(source: &RgbImage) -> Result<Self, Self::Error> {
         let width = i32::try_from(source.width()).map_err(|_| HeifError::ImageWidthOutOfRange)?;
         let height =
             i32::try_from(source.height()).map_err(|_| HeifError::ImageHeightOutOfRange)?;
@@ -389,7 +392,7 @@ impl TryFrom<&RgbaImage> for HeifImage {
                 width,
                 height,
                 libheif_sys::heif_colorspace_heif_colorspace_RGB,
-                libheif_sys::heif_chroma_heif_chroma_interleaved_RGBA,
+                libheif_sys::heif_chroma_heif_chroma_interleaved_RGB,
                 &mut image,
             ))?;
         }
@@ -415,9 +418,9 @@ impl TryFrom<&RgbaImage> for HeifImage {
             )
         };
         let destination = NonNull::new(destination)
-            .expect("libheif did not allocate the requested interleaved RGBA plane");
+            .expect("libheif did not allocate the requested interleaved RGB plane");
 
-        let source_stride = source.width() as usize * 4;
+        let source_stride = source.width() as usize * 3;
         let destination =
             unsafe { slice::from_raw_parts_mut(destination.as_ptr(), stride * height as usize) };
         for (source_row, destination_row) in source
@@ -434,8 +437,8 @@ impl TryFrom<&RgbaImage> for HeifImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{HeifImage, Preset, build_heif, check_heif_error, load_rgba};
-    use image::{ImageFormat, RgbaImage};
+    use super::{HeifImage, Preset, build_heif, check_heif_error, load_rgb};
+    use image::{ImageFormat, RgbImage, RgbaImage};
     use std::{
         ffi::CString,
         fs, slice,
@@ -443,15 +446,15 @@ mod tests {
     };
 
     #[test]
-    fn loads_png_as_rgba_without_changing_pixels() {
+    fn loads_png_as_rgb_and_discards_alpha() {
         let source = RgbaImage::from_raw(1, 1, vec![1, 2, 3, 4]).unwrap();
         let path = std::env::temp_dir().join(format!("mkwp-{}-load.png", std::process::id()));
         source.save_with_format(&path, ImageFormat::Png).unwrap();
 
-        let decoded = load_rgba(&path).unwrap();
+        let decoded = load_rgb(&path).unwrap();
         fs::remove_file(path).unwrap();
 
-        assert_eq!(decoded, source);
+        assert_eq!(decoded.as_raw(), &[1, 2, 3]);
     }
 
     #[test]
@@ -522,6 +525,10 @@ mod tests {
             ))
             .unwrap();
             assert_eq!(
+                libheif_sys::heif_image_handle_get_number_of_auxiliary_images(primary_handle, 0,),
+                0
+            );
+            assert_eq!(
                 libheif_sys::heif_image_handle_get_number_of_metadata_blocks(
                     primary_handle,
                     c"mime".as_ptr(),
@@ -557,13 +564,13 @@ mod tests {
     }
 
     #[test]
-    fn copies_rgba_pixels_into_a_same_sized_heif_image() {
-        let source = RgbaImage::from_raw(
+    fn copies_rgb_pixels_into_a_same_sized_heif_image() {
+        let source = RgbImage::from_raw(
             2,
             2,
             vec![
-                1, 2, 3, 4, 5, 6, 7, 8, // first row
-                9, 10, 11, 12, 13, 14, 15, 16, // second row
+                1, 2, 3, 4, 5, 6, // first row
+                7, 8, 9, 10, 11, 12, // second row
             ],
         )
         .unwrap();
@@ -594,7 +601,7 @@ mod tests {
             slice::from_raw_parts(pixels, stride * 2)
         };
 
-        assert_eq!(&pixels[..8], &source.as_raw()[..8]);
-        assert_eq!(&pixels[stride..stride + 8], &source.as_raw()[8..]);
+        assert_eq!(&pixels[..6], &source.as_raw()[..6]);
+        assert_eq!(&pixels[stride..stride + 6], &source.as_raw()[6..]);
     }
 }
