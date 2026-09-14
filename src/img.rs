@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::Input;
+use crate::{Input, metadata};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum Preset {
@@ -49,6 +49,8 @@ pub enum HeifError {
     ImageWidthOutOfRange,
     #[error("image height is out of range")]
     ImageHeightOutOfRange,
+    #[error("XMP metadata is too large")]
+    MetadataTooLarge,
     #[error("libheif error: {0}")]
     LibHeif(String),
 }
@@ -85,6 +87,8 @@ pub enum BuildHeifError {
     Image(#[from] ImageToHeifError),
     #[error(transparent)]
     Heif(#[from] HeifError),
+    #[error(transparent)]
+    Metadata(#[from] metadata::MetadataError),
     #[error("output path '{path}' is not valid UTF-8")]
     OutputPathNotUtf8 { path: PathBuf },
     #[error("output path contains an embedded NUL byte: {path}")]
@@ -159,6 +163,7 @@ pub fn build_heif(
     let encoder = HeifEncoder::new(context.as_ptr())?;
     encoder.set_quality(90)?;
     encoder.set_preset(preset)?;
+    let xmp = metadata::xmp(inputs)?;
 
     for (index, input) in inputs.iter().enumerate() {
         let image_path = base_dir.join(input.file_name());
@@ -173,6 +178,7 @@ pub fn build_heif(
         let encoded = context.encode(&image, &encoder)?;
         if input.is_primary() {
             context.set_primary(&encoded)?;
+            context.add_xmp_metadata(&encoded, &xmp)?;
         }
 
         info!(
@@ -247,6 +253,18 @@ impl HeifContext {
             check_heif_error(libheif_sys::heif_context_set_primary_image(
                 self.as_ptr(),
                 image.as_ptr(),
+            ))
+        }
+    }
+
+    fn add_xmp_metadata(&self, image: &EncodedImage, xmp: &[u8]) -> Result<(), HeifError> {
+        let size = i32::try_from(xmp.len()).map_err(|_| HeifError::MetadataTooLarge)?;
+        unsafe {
+            check_heif_error(libheif_sys::heif_context_add_XMP_metadata(
+                self.as_ptr(),
+                image.as_ptr(),
+                xmp.as_ptr().cast(),
+                size,
             ))
         }
     }
@@ -496,6 +514,42 @@ mod tests {
             ))
             .unwrap();
             assert_eq!(primary_id, image_ids[1]);
+
+            let mut primary_handle = std::ptr::null_mut();
+            check_heif_error(libheif_sys::heif_context_get_primary_image_handle(
+                context,
+                &mut primary_handle,
+            ))
+            .unwrap();
+            assert_eq!(
+                libheif_sys::heif_image_handle_get_number_of_metadata_blocks(
+                    primary_handle,
+                    c"mime".as_ptr(),
+                ),
+                1
+            );
+            let mut metadata_id = 0;
+            assert_eq!(
+                libheif_sys::heif_image_handle_get_list_of_metadata_block_IDs(
+                    primary_handle,
+                    c"mime".as_ptr(),
+                    &mut metadata_id,
+                    1,
+                ),
+                1
+            );
+            let metadata_size =
+                libheif_sys::heif_image_handle_get_metadata_size(primary_handle, metadata_id);
+            let mut metadata = vec![0; metadata_size];
+            check_heif_error(libheif_sys::heif_image_handle_get_metadata(
+                primary_handle,
+                metadata_id,
+                metadata.as_mut_ptr().cast(),
+            ))
+            .unwrap();
+            assert_eq!(metadata, crate::metadata::xmp(&inputs).unwrap());
+
+            libheif_sys::heif_image_handle_release(primary_handle);
             libheif_sys::heif_context_free(context);
         }
 

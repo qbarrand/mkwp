@@ -81,6 +81,13 @@ impl Input {
             Self::Solar(_) => None,
         }
     }
+
+    pub(crate) fn solar_position(&self) -> Option<(f64, f64)> {
+        match self {
+            Self::Time(_) => None,
+            Self::Solar(input) => Some((input.altitude, input.azimuth)),
+        }
+    }
 }
 
 pub fn parse_json(json: &str) -> Result<Vec<Input>, serde_json::Error> {
